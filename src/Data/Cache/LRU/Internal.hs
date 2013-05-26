@@ -11,18 +11,18 @@
 -- "Data.Cache.LRU" instead.
 module Data.Cache.LRU.Internal where
 
-import Prelude hiding ( last, lookup )
+import           Prelude         hiding (last, lookup)
 
-import Data.Map ( Map )
-import qualified Data.Map as Map
+import           Data.Map        (Map)
+import qualified Data.Map        as Map
 #if MIN_VERSION_containers(0,5,0)
 import qualified Data.Map.Strict as MapStrict
 #endif
 
 -- | Stores the information that makes up an LRU cache
 data LRU key val = LRU {
-      first :: !(Maybe key) -- ^ the key of the most recently accessed entry
-    , last :: !(Maybe key) -- ^ the key of the least recently accessed entry
+      first   :: !(Maybe key) -- ^ the key of the most recently accessed entry
+    , last    :: !(Maybe key) -- ^ the key of the least recently accessed entry
     , maxSize :: !(Maybe Integer) -- ^ the maximum size of the LRU cache
     , content :: !(Map key (LinkedVal key val)) -- ^ the backing 'Map'
     } deriving Eq
@@ -38,8 +38,8 @@ instance Functor (LRU key) where
 -- doubly-linked list through the values of the 'Map'.
 data LinkedVal key val = Link {
       value :: val -- ^ The actual value
-    , prev :: !(Maybe key) -- ^ the key of the value before this one
-    , next :: !(Maybe key) -- ^ the key of the value after this one
+    , prev  :: !(Maybe key) -- ^ the key of the value before this one
+    , next  :: !(Maybe key) -- ^ the key of the value after this one
     } deriving Eq
 
 instance Functor (LinkedVal key) where
@@ -80,7 +80,18 @@ toList lru = maybe [] (listLinks . content $ lru) $ first lru
 -- If this would cause the LRU to exceed its maximum size, the
 -- least recently used item is dropped from the cache.
 insert :: Ord key => key -> val -> LRU key val -> LRU key val
-insert key val lru = maybe emptyCase nonEmptyCase $ first lru
+insert key val lru = fst $ insert' key val lru
+
+-- | Add an item to an LRU.  If the key was already present in the
+-- LRU, the value is changed to the new value passed in.  The
+-- item added is marked as the most recently accessed item in the
+-- LRU returned.
+--
+-- If this would cause the LRU to exceed its maximum size, the
+-- least recently used item is dropped and returned with the
+-- new cache.
+insert' :: Ord key => key -> val -> LRU key val -> (LRU key val, Maybe (key, val))
+insert' key val lru = maybe (emptyCase, Nothing) nonEmptyCase $ first lru
     where
       contents = content lru
       full = maybe False (fromIntegral (Map.size contents) ==) $ maxSize lru
@@ -97,13 +108,15 @@ insert key val lru = maybe emptyCase nonEmptyCase $ first lru
 
       -- this updates the value stored with the key, then marks it as
       -- the most recently accessed
-      hitSet = hit' key lru'
+      hitSet = (hit' key lru', Nothing)
           where lru' = lru { content = contents' }
                 contents' = adjust' (\v -> v {value = val}) key contents
 
       -- create a new LRU with a new first item, and
       -- conditionally dropping the last item
-      add firstKey = if full then lru'' else lru'
+      add firstKey = if full
+                       then (lru'', Just (lastKey, value lastLV))
+                       else (lru', Nothing)
           where
             -- add a new first item
             firstLV' = Link val Nothing $ Just firstKey
@@ -240,6 +253,7 @@ delete' key lru cont' lv = if Map.null cont' then deleteOnly else deleteOne
       contMid = adjust' (\v -> v { next = next lv }) pKey .
                 adjust' (\v -> v { prev = prev lv }) nKey $
                 cont'
+
 
 -- | Internal function.  This is very similar to 'Map.adjust', with
 -- two major differences.  First, it's strict in the application of
